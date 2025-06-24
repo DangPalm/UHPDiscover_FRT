@@ -19,6 +19,8 @@ covid_2021 <- covid_data %>%
                                     GovernmentResponseIndex_Average,
                                     ContainmentHealthIndex_Average,
                                     EconomicSupportIndex) %>%
+  #Mutate a region name to match NFCS data
+  mutate(RegionName = ifelse(RegionName=="Washington DC","District of Columbia",RegionName)) %>%
   #Group by Region
   group_by(RegionName, Year) %>%
   #Mean 2021 indices by state
@@ -27,5 +29,3 @@ covid_2021 <- covid_data %>%
             ContainmentHealthIndex_Average = mean(ContainmentHealthIndex_Average, na.rm = TRUE),
             EconomicSupportIndex = mean(EconomicSupportIndex, na.rm = TRUE)) %>%
   ungroup()
-
-
