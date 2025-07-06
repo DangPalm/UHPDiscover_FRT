@@ -1,0 +1,1098 @@
+---
+title: "UHP_Discover_Data_Analysis"
+output: html_document
+date: "2025-06-26"
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Import and merge dataset
+
+## 1.1 Import libraries
+
+```{r}
+install.packages("tidyverse")
+install.packages("janitor")
+install.packages("reshape2")
+install.packages("viridis")
+
+library(tidyverse)
+library(dplyr)
+library(janitor)
+```
+
+## 1.2 Import dataset
+
+```{r}
+#Read NFCS 2021 State by State and Investor Data
+state_2021 <- read_csv("NFCS state by state.csv")
+investor_2021 <- read_csv("NFCS 2021 Investor Data 221121.csv")
+#Read NFCS 2018 State by State and Investor Data
+state_2018 <- read_csv("NFCS 2018 State Data 190603.csv")
+investor_2018 <- read_csv("NFCS 2018 Investor Data 191107.csv")
+```
+
+# 2. Data Cleaning
+
+## 2.1 Merge datasets
+
+Merge 2018 and 2021 State by State datasets
+
+\- Rename A3 to A50A as the standard column for gender.
+
+\- Rename A3B to A50B as the standard column for gender-age group.
+
+\- Combine top 3 income brackets in question `A8` into one for consistency
+
+\- Bind rows for `state_2018` and `state_2021` datasets
+
+```{r}
+#Access columns are different in the state datasets
+state_2018_exclusive <- setdiff(colnames(state_2018), colnames(state_2021))
+state_2021_exclusive <- setdiff(colnames(state_2021), colnames(state_2018))
+#Standardize question names
+state_2018 <- state_2018 %>% rename(A50A = A3, A50B = A3B)
+state_2021 <- state_2021 %>% rename(A8 = A8_2021)
+#Standardize for income question A8 in 2021, change option 8, 9, 10 to 8
+state_2021$A8[state_2021$A8 %in% c(8,9,10)] <- 8
+#Merge
+state <- bind_rows(state_2018, state_2021)
+```
+
+Merge 2018 and 2021 Investor datasets
+
+\- Rename `S_Gender2` to `S_Gender` as the standard column for gender.
+
+\- Add a source year column to distinct 2018 rows to 2021 rows.
+
+\- Bind rows for `investor_2018` and `investor_2021` datasets.
+
+```{r}
+#Access columns are different in the investor datasets
+investor_2018_exclusive <- setdiff(colnames(investor_2018), colnames(investor_2021))
+investor_2021_exclusive <- setdiff(colnames(investor_2021), colnames(investor_2018))
+#Standardize question names
+investor_2021 <- investor_2021 %>% rename(S_Gender = S_Gender2)
+#Add source year
+investor_2018 <- investor_2018 %>% mutate(source_year = 2018)
+investor_2021 <- investor_2021 %>% mutate(source_year = 2021)
+#Merge
+investor <- bind_rows(investor_2018, investor_2021)
+```
+
+Merge state and investor datasets
+
+```{r}
+#Merge State and Investor datasets
+NFCS_data <- merge(investor, state, by="NFCSID")
+```
+
+## 2.2 Filter key variables
+
+```{r}
+key_vars <- c(
+  # Year
+  "source_year",
+  # Demographics
+  "A50A", "A3Ar_w", "A4A_new_w", "A5_2015", "A9", "A21_2015", "A8", "STATEQ",
+  "CENSUSDIV", "A6", "A7", "A11", "X3",
+  
+  # Student loan
+  "G30_1.y",
+  
+  # Subjective & Objective Financial Knowledge
+  "G2", "G4", "G5", "G6", "G7", "G8", "G11", "G12", "G13", "G21", "G22", "G23.x",
+  
+  # Market Entry Point
+  "B30", "B31.x",
+  
+  # Trade Frequency & Experience
+  "B3", "B32", "B6", "B34",
+  
+  # Subjective Financial Risk Tolerance
+  "B10", "J2",
+  
+  # Financial Risk-Taking Behavior
+  "B2_1", "B2_2", "B2_3", "B2_4", "B2_5", "B2_7", "B2_20", "B2_21", "B2_22",
+  "B2_23", "B2_24", "B2_25", "B11", "B25", "B26"
+)
+
+NFCS_selected <- NFCS_data %>% select(all_of(key_vars))
+```
+
+# Exploratory Data Analysis
+
+## 1. Dataset Overview
+
+```{r}
+#1. Preview sample of the data
+head(NFCS_selected)
+#2. View number of observations and features
+cat("Number of rows:", nrow(NFCS_selected), "\n")
+cat("Number of columns:", ncol(NFCS_selected), "\n")
+
+#3. View data types of each column
+str(NFCS_selected)
+
+#4. Check for duplicated rows
+num_duplicates <- sum(duplicated(NFCS_selected))
+cat("Number of duplicated rows:", num_duplicates,"\n")
+
+#5. Count missing values per feature
+missing_per_feature <- colSums(is.na(NFCS_selected))
+print("NAs per variable")
+print(missing_per_feature)
+
+#6. Count missing percentage per feature
+missing_percent_feature <- round(colSums(is.na(NFCS_selected))/nrow(NFCS_selected)*100,2)
+print("NAs percentage per variable")
+print(missing_percent_feature)
+
+#7. Count missing values in the dataset
+total_missing <- sum(is.na(NFCS_selected))
+cat("Total number of missing cells:", total_missing,"\n")
+
+#8. Percentage of missing cells
+total_cells <- nrow(NFCS_selected) * nrow(NFCS_selected)
+missing_percentage <- round((total_missing/total_cells)*100,2)
+cat("Percentage of missing cells:", missing_percentage, "%\n")
+```
+
+## 2. Univariate Analysis
+
+### Gender - A50A
+
+```{r}
+# Gender Distribution
+
+#Graph
+NFCS_selected %>%
+  ggplot(aes(x = factor(A50A, levels = c(1,2), labels = c("Male", "Female")))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Gender - A50A", y = "Frequency", title = "Gender Distribution")
+
+#Count and proportion
+gender_summary <- NFCS_selected %>% 
+  mutate(Gender = factor(A50A, levels = c(1,2), labels = c("Male","Female"))) %>%
+  group_by(Gender) %>%
+  summarise(
+    Count = n(),
+    Proportion = round(n() / nrow(NFCS_selected)*100, 1)
+  )
+gender_summary
+```
+
+### Age Group - A3Ar_w
+
+```{r}
+# Age Group Distribution
+
+#Graph
+NFCS_selected %>%
+  ggplot(aes(x = factor(A3Ar_w, levels = c(1,2,3,4,5,6), labels = c("18–24", "25–34", "35–44", "45–54", "55–64", "65+")))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Age Group - A3Ar_w", y = "Frequency", title = "Age Group Distribution")
+
+#Count and proportion
+age_summary <- NFCS_selected %>% 
+  mutate(Age = factor(A3Ar_w, levels = c(1,2,3,4,5,6), labels = c("18–24", "25–34", "35–44", "45–54", "55–64", "65+"))) %>%
+  group_by(Age) %>%
+  summarise(
+    Count = n(),
+    Proportion = round(n() / nrow(NFCS_selected)*100, 1)
+  )
+age_summary
+```
+
+### Education Level - A5_2015
+
+```{r}
+#Education Level Distribution
+
+#Define levels and labels
+edu_levels <- c(1,2,3,4,5,6,7,99)
+edu_labels <- c("Did not complete high school",
+                "High school diploma",
+                "GED/alternative",
+                "Some college",
+                "Associate's",
+                "Bachelor's",
+                "Postgraduate",
+                "Prefer not to say")
+#Draw bar graph
+NFCS_selected %>% ggplot(aes(x = factor(A5_2015, levels = edu_levels, labels = edu_labels))) +
+                        geom_bar(fill="#69b3a2", color = "black") +
+                        labs(x="Education Level - A5_2015", y="Frequency", title = "Education Level Distribution") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Summary table
+education_summary <- NFCS_selected %>% 
+  mutate(Education = factor(A5_2015, levels = edu_levels, labels = edu_labels)) %>%
+  group_by(Education) %>%
+  summarise(
+    Count = n(),
+    Proportion = round(n() / nrow(NFCS_selected)*100,1)
+  )
+education_summary  
+```
+
+### Having Student Loans taken out for themselves - G30_1.y
+
+```{r}
+#Define levels and labels
+loan_levels <- c(1, 0)
+loan_labels <- c("Yes", "No")
+#Creating bar chart
+NFCS_selected %>% 
+  ggplot(aes(x=factor(G30_1.y, levels = loan_levels, labels = loan_labels))) +
+  geom_bar(fill="#69b3a2", color="black") +
+  labs(x = "Has Student Loan for themselves - G30_1.y", y = "Frequency", title = "Student Loan Status")
+#Create summary table
+loan_summary <- NFCS_selected %>%
+  filter(G30_1.y %in% loan_levels) %>%
+  mutate(StudentLoan = factor(G30_1.y, levels = loan_levels, labels = loan_labels)) %>%
+  group_by(StudentLoan) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / nrow(NFCS_selected) * 100, 1))
+
+loan_summary
+```
+
+### Subjective Financial Knowledge - G2
+
+```{r}
+# Self-rated Financial Knowledge Distribution
+NFCS_selected %>%
+  filter(G2 %in% 1:7) %>%
+  ggplot(aes(x = factor(G2, levels = 1:7))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Self-rated financial knowledge score - G2", y = "Frequency", title = "Self-Rated Financial Knowledge Distribution")
+
+```
+
+### Objective Financial Knowledge - Composite Score
+
+```{r}
+#Financial Knowledge
+#Sum up the total score for each respondent
+quiz_vars <- c("G4", "G5", "G6", "G7", "G8",
+               "G11", "G12", "G13", "G21",
+               "G22") #Exclude G23.x since it's only in 2021 survey
+
+#List correct answers for these questions
+correct_answers <- c(
+  G4 = 1,
+  G5 = 2,
+  G6 = 2,
+  G7 = 1,
+  G8 = 1,
+  G11 = 3,
+  G12 = 3,
+  G13 = 4,
+  G21 = 2,
+  G22 = 2
+)
+#Score respondent's quiz
+NFCS_selected <- NFCS_selected %>%
+  mutate(across(all_of(quiz_vars), 
+                ~ ifelse(. == correct_answers[as.character(cur_column())], 1, 0))) %>%
+  mutate(fin_knowledge_score = rowSums(across(all_of(quiz_vars)), na.rm = TRUE))
+
+#Create bar chart
+NFCS_selected %>% ggplot(aes(x=fin_knowledge_score)) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x="Subjective Financial Knowledge Score Out of 10")
+
+#Summary table
+fin_knowledge_score_summary <- NFCS_selected %>%
+  summarise(Count = n(),
+    Mean = mean(fin_knowledge_score),
+    Median = median(fin_knowledge_score),
+    SD = sd(fin_knowledge_score),
+    Min = min(fin_knowledge_score),
+    Max = max(fin_knowledge_score),
+    IQR = IQR(fin_knowledge_score)
+  )
+fin_knowledge_score_summary
+
+```
+
+### First time investing in non-retirement account - B30
+
+```{r}
+#Define levels and labels
+first_inv_levels <- c("1","2","3","4","5","98","99")
+first_inv_labels <- c("Less than a year ago","1 year to less than 2 years ago","2 years to less than 5 years ago","5 years to less than 10 years ago","10 years ago or more","Don't know", "Prefer not to say")
+
+#Create bar chart
+NFCS_selected %>% 
+  filter(B30 %in% first_inv_levels) %>% 
+  ggplot(aes(x = factor(B30, levels = first_inv_levels, labels = first_inv_labels), na.rm=TRUE)) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "When respondent most recently opened a new non-retirement investment account") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Summary table
+#Create summary table
+valid_base_B30 <- NFCS_selected %>% filter(!is.na(B30)) %>% nrow() #Count total number of rows not NA since question is only in the 2021 survey
+
+first_inv_summary <- NFCS_selected %>%
+  filter(B30 %in% first_inv_levels) %>%
+  mutate(FirstInvestAcc = factor(B30, levels = first_inv_levels, labels = first_inv_labels)) %>%
+  group_by(FirstInvestAcc) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / valid_base_B30 * 100, 1))
+
+first_inv_summary
+```
+
+### Most recent time opening a non-retirement account - B31.x
+
+```{r}
+# Define levels and labels for B31.x
+recent_acc_levels <- c("1", "2", "3", "4", "98", "99")
+recent_acc_labels <- c("2018 or earlier", "2019", "2020", "2021", "Don't know", "Prefer not to say")
+
+# Create bar chart for B31.x
+NFCS_selected %>%
+  filter(`B31.x` %in% recent_acc_levels) %>%
+  ggplot(aes(x = factor(`B31.x`, levels = recent_acc_levels, labels = recent_acc_labels))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "When respondent most recently opened a non-retirement investment account") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Create summary table for B31.x
+valid_base_B31 <- NFCS_selected %>%
+  filter(!is.na(`B31.x`)) %>%
+  nrow()
+
+recent_acc_summary <- NFCS_selected %>%
+  filter(`B31.x` %in% recent_acc_levels) %>%
+  mutate(RecentInvestAcc = factor(`B31.x`, levels = recent_acc_levels, labels = recent_acc_labels)) %>%
+  group_by(RecentInvestAcc) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / valid_base_B31 * 100, 1))
+
+recent_acc_summary
+```
+
+### Trade frequency in the past 12 months - B3
+
+```{r}
+# Define levels and labels for both B3 and B32
+trade_freq_levels <- c("1", "2", "3", "4", "5", "98", "99")
+trade_freq_labels <- c("Every day", 
+                       "A few times a week", 
+                       "A few times a month", 
+                       "A few times a year", 
+                       "Less than once a year", 
+                       "Don't know", 
+                       "Prefer not to say")
+#Create bar chart
+NFCS_selected %>%
+  filter(B3 %in% trade_freq_levels) %>%
+  ggplot(aes(x = factor(B3, levels = trade_freq_levels, labels = trade_freq_labels))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Trade frequency in the past 12 months") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Create summary table
+valid_base_B3 <- NFCS_selected %>% filter(!is.na(B3)) %>% nrow()
+
+trade_freq_summary_B3 <- NFCS_selected %>%
+  filter(B3 %in% trade_freq_levels) %>%
+  mutate(TradeFreq = factor(B3, levels = trade_freq_levels, labels = trade_freq_labels)) %>%
+  group_by(TradeFreq) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / valid_base_B3 * 100, 1))
+
+trade_freq_summary_B3
+
+```
+
+### Trade frequency during pandemic - B32
+
+```{r}
+# Define levels and labels for B32
+b32_levels <- c("1", "2", "98", "99")
+b32_labels <- c("Yes", "No", "Don't know", "Prefer not to say")
+
+# Create bar chart for B32
+NFCS_selected %>%
+  filter(B32 %in% b32_levels) %>%
+  ggplot(aes(x = factor(B32, levels = b32_levels, labels = b32_labels))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Did respondent trade more frequently during the pandemic?") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+
+#Create summary table
+valid_base_B32 <- NFCS_selected %>% filter(!is.na(B32)) %>% nrow()
+
+b32_summary <- NFCS_selected %>%
+  filter(B32 %in% b32_levels) %>%
+  mutate(TradeChange = factor(B32, levels = b32_levels, labels = b32_labels)) %>%
+  group_by(TradeChange) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / valid_base_B32 * 100, 1))
+
+b32_summary
+```
+
+### Self-assessed financial risk tolerance (4-point scale, Investor Survey)
+
+```{r}
+#Define levels and labels
+b10_levels <- c("1", "2", "3", "4", "98", "99")
+b10_labels <- c("Not willing to take any risk", 
+                "Take average risk for average return", 
+                "Take above average risk for above average return", 
+                "Take substantial risk for substantial return",
+                "Don't know", 
+                "Prefer not to say")
+
+#Create bar chart
+NFCS_selected %>%
+  filter(B10 %in% b10_levels) %>%
+  ggplot(aes(x = factor(B10, levels = b10_levels, labels = b10_labels))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  coord_flip() +
+  labs(x = "Self-assessed financial risk tolerance") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Create summary table for B10
+valid_base_B10 <- NFCS_selected %>% filter(!is.na(B10)) %>% nrow()
+
+b10_summary <- NFCS_selected %>%
+  filter(B10 %in% b10_levels) %>%
+  mutate(RiskTolerance = factor(B10, levels = b10_levels, labels = b10_labels)) %>%
+  group_by(RiskTolerance) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = round(Count / valid_base_B10 * 100, 1))
+
+b10_summary
+```
+
+### Willingness to take risk (10-point scale, State-by-State Survey)
+
+```{r}
+#Define levels
+j2_levels <- as.character(1:10)
+
+#Create bar chart
+NFCS_selected %>%
+  filter(J2 %in% j2_levels) %>%
+  ggplot(aes(x = factor(J2))) +
+  geom_bar(fill = "#69b3a2", color = "black") +
+  labs(x = "Willingness to Take Risk (1 = least, 10 = most)", y = "Count",
+       title = "Self-Reported Willingness to Take Financial Risk") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+#Create summary table for J2
+valid_base_J2 <- NFCS_selected %>%
+  filter(!is.na(J2)) %>%
+  nrow()
+
+j2_summary <- NFCS_selected %>%
+  filter(J2 %in% j2_levels) %>%
+  summarise(Count = n(),
+    Mean = mean(J2),
+    Median = median(J2),
+    SD = sd(J2),
+    Min = min(J2),
+    Max = max(J2),
+    IQR = IQR(J2)
+  )
+
+j2_summary
+
+```
+
+### Ownership or Interest in Investment Type
+
+```{r}
+# List of variables to plot
+selected_vars <- c("B2_1", "B2_2", "B2_3", "B2_4", "B2_7", "B2_25", "B26")
+selected_labels <- c("Own individual stocks", 
+                     "Own individual bonds",
+                     "Own mutual funds", 
+                     "Own ETFs", 
+                     "Own commodities or futures", 
+                     "Own cryptocurrency", 
+                     "Would consider investing in cryptocurrency")
+#Reshape
+NFCS_selected %>%
+  select(all_of(selected_vars)) %>%
+  pivot_longer(cols = everything(), names_to = "InvestmentType", values_to = "Owns") %>%
+  filter(Owns == 1) %>%
+  group_by(InvestmentType) %>%
+  summarise(Count = n()) %>%
+  mutate(InvestmentType = factor(InvestmentType, levels = selected_vars, labels = selected_labels)) %>%
+#Plot bar graph
+  ggplot(aes(x = InvestmentType, y = Count)) +
+  geom_col(fill = "#69b3a2", color = "black") +
+  labs(x = "Investment Type", y = "Number of Respondents", title = "Ownership or Interest in Investment Types") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## 3. Bivariate Analysis
+
+## 3.1 Financial Knowledge - Objective and Subjective
+
+### By Age Group
+
+```{r}
+NFCS_selected %>%
+  filter(G2 %in% 1:7, A3Ar_w %in% 1:6) %>%  # Keep valid G2 and age group responses
+  mutate(Age_Group = factor(A3Ar_w, levels = 1:6, labels = c(
+    "18–24",
+    "25–34",
+    "35–44",
+    "45–54",
+    "55–64",
+    "65+"
+  ))) %>%
+  group_by(Age_Group) %>%
+  summarize(
+    Mean_G2 = mean(G2, na.rm = TRUE),
+    SD_G2 = sd(G2, na.rm = TRUE),
+    mean_fin_knowledge_score = mean(fin_knowledge_score, na.rm = TRUE),
+    sd_fin_knowledge_score = sd(fin_knowledge_score, na.rm = TRUE),
+    N = n()
+  ) %>%
+  arrange(Age_Group) %>%  # Optional: order from youngest to oldest
+  rename(
+    `Subjective Financial Knowledge (Mean)` = Mean_G2,
+    `Subjective Financial Knowledge (SD)` = SD_G2,
+    `Objective Financial Knowledge (Mean)` = mean_fin_knowledge_score,
+    `Objective Financial Knowledge (SD)` = sd_fin_knowledge_score,
+    `Sample Size (N)` = N
+  )
+```
+
+### By Education Level
+
+```{r}
+NFCS_selected %>%
+  filter(G2 %in% 1:7) %>%  # Keep only valid G2 - Subjective Financial Knowledge responses (1–7)
+  mutate(Education = factor(A5_2015, levels = edu_levels, labels = edu_labels)) %>%  # Label education levels
+  group_by(Education) %>%  # Group data by education level
+  summarize( # Calculate summary statistics for G2
+    Mean_G2 = mean(G2, na.rm = TRUE),  
+    SD_G2 = sd(G2, na.rm = TRUE),
+    mean_fin_knowledge_score = mean(fin_knowledge_score, na.rm = TRUE),
+    sd_fin_knowledge_score = sd(fin_knowledge_score, na.rm = TRUE),
+    N = n()   
+  ) %>%
+  arrange(desc(Mean_G2)) %>%  # Sort by mean G2 - Subjective Financial Knowledge, high to low
+  rename(  # Rename columns for clarity
+    `Subjective Financial Knowledge (Mean)` = Mean_G2,
+    `Subjective Financial Knowledge (SD)` = SD_G2,
+    `Objective Financial Knowledge (Mean)` = mean_fin_knowledge_score,
+    `Objective Financial Knowledge (SD)` = sd_fin_knowledge_score,
+    `Sample Size (N)` = N
+  )
+```
+
+### By Income Level
+
+```{r}
+NFCS_selected %>%
+  filter(G2 %in% 1:7, A8 %in% 1:8) %>%  # Keep valid G2 and income responses
+  mutate(Income = factor(A8, levels = 1:8, labels = c(
+    "<$15k", "$15k–25k", "$25k–35k", "$35k–50k",
+    "$50k–75k", "$75k–100k", "$100k–150k", ">$150k"
+  ))) %>%
+  group_by(Income) %>%
+  summarize(
+    Mean_G2 = mean(G2, na.rm = TRUE),  
+    SD_G2 = sd(G2, na.rm = TRUE),
+    mean_fin_knowledge_score = mean(fin_knowledge_score, na.rm = TRUE),
+    sd_fin_knowledge_score = sd(fin_knowledge_score, na.rm = TRUE),
+    N = n()
+  ) %>%
+  arrange(desc(`mean_fin_knowledge_score`)) %>%
+  rename(
+    `Subjective Financial Knowledge (Mean)` = Mean_G2,
+    `Subjective Financial Knowledge (SD)` = SD_G2,
+    `Objective Financial Knowledge (Mean)` = mean_fin_knowledge_score,
+    `Objective Financial Knowledge (SD)` = sd_fin_knowledge_score,
+    `Sample Size (N)` = N
+  )
+```
+
+### By Employment Status
+
+```{r}
+NFCS_selected %>%
+  filter(G2 %in% 1:7, A9 %in% 1:8) %>%  # Keep valid responses only
+  mutate(Employment = factor(A9, levels = 1:8, labels = c(
+    "Self-employed",
+    "Full-time employed",
+    "Part-time employed",
+    "Homemaker",
+    "Full-time student",
+    "Disabled/unable to work",
+    "Unemployed",
+    "Retired"
+  ))) %>%
+  group_by(Employment) %>%
+  summarize(
+    Mean_G2 = mean(G2, na.rm = TRUE),
+    SD_G2 = sd(G2, na.rm = TRUE),
+    mean_fin_knowledge_score = mean(fin_knowledge_score, na.rm = TRUE),
+    sd_fin_knowledge_score = sd(fin_knowledge_score, na.rm = TRUE),
+    N = n()
+  ) %>%
+  arrange(desc(mean_fin_knowledge_score)) %>%
+  rename(
+    `Subjective Financial Knowledge (Mean)` = Mean_G2,
+    `Subjective Financial Knowledge (SD)` = SD_G2,
+    `Objective Financial Knowledge (Mean)` = mean_fin_knowledge_score,
+    `Objective Financial Knowledge (SD)` = sd_fin_knowledge_score,
+    `Sample Size (N)` = N
+  )
+```
+
+## 3.2 Financial Risk & Investment
+
+### Risk Scores by Age group
+
+```{r}
+# Create summary table
+risk_summary_by_agegroup <- NFCS_selected %>%
+  filter(J2 %in% 1:10, A3Ar_w %in% 1:6, B10 %in% 1:4) %>%
+  mutate(
+    Age_Group = factor(A3Ar_w, levels = 1:6, labels = c(
+      "18–24", "25–34", "35–44", "45–54", "55–64", "65+"
+    )),
+    `Financial Risk Profile Score` = 5 - B10  # Higher = more risk-tolerant
+  ) %>%
+  group_by(Age_Group) %>%
+  summarize(
+    `Willingness to Take Risk (Mean)` = mean(J2, na.rm = TRUE),
+    `Willingness to Take Risk (SD)` = sd(J2, na.rm = TRUE),
+    `Financial Risk Profile (Mean)` = mean(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Financial Risk Profile (SD)` = sd(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Sample Size (N)` = n()
+  ) %>%
+  arrange(Age_Group)
+
+risk_summary_by_agegroup
+```
+
+Plot bar and line
+
+```{r}
+# Create bar + line chart
+ggplot(risk_summary_by_agegroup, aes(x = Age_Group)) +
+  geom_col(
+    aes(y = `Willingness to Take Risk (Mean)`),
+    fill = "steelblue"
+  ) +
+  geom_line(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5, group = 1),
+    color = "darkorange"
+  ) +
+  geom_point(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5),
+    color = "darkorange", size = 3
+  ) +
+  scale_y_continuous(
+    name = "Willingness to Take Risk (1–10)",
+    sec.axis = sec_axis(~ . / 2.5, name = "Financial Risk Profile (1–4)")
+  ) +
+  labs(
+    title = "Risk Attitudes by Age Group",
+    x = "Age Group"
+  ) +
+  theme_minimal()
+```
+
+### Risk Scores by Gender
+
+```{r}
+
+# Create summary table
+risk_summary_by_gender <- NFCS_selected %>%
+  filter(J2 %in% 1:10, A50A %in% 1:2, B10 %in% 1:4) %>%
+  mutate(
+    Gender = factor(A50A, levels = 1:2, labels = c("Male", "Female")),
+    `Financial Risk Profile Score` = 5 - B10  # Recode: higher = more risk-taking
+  ) %>%
+  group_by(Gender) %>%
+  summarize(
+    `Willingness to Take Risk (Mean)` = mean(J2, na.rm = TRUE),
+    `Willingness to Take Risk (SD)` = sd(J2, na.rm = TRUE),
+    `Financial Risk Profile (Mean)` = mean(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Financial Risk Profile (SD)` = sd(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Sample Size (N)` = n()
+  ) %>%
+  arrange(Gender)
+risk_summary_by_gender
+
+```
+
+```{r}
+
+# Plot bar + line chart
+ggplot(risk_summary_by_gender, aes(x = Gender)) +
+  geom_col(
+    aes(y = `Willingness to Take Risk (Mean)`),
+    fill = "steelblue",
+    width = 0.6
+  ) +
+  geom_line(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5, group = 1),
+    color = "darkorange", size = 1.2
+  ) +
+  geom_point(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5),
+    color = "darkorange"
+  ) +
+  scale_y_continuous(
+    name = "Willingness to Take Risk (1–10)",
+    sec.axis = sec_axis(~ . / 2.5, name = "Financial Risk Profile (1–4)")
+  ) +
+  labs(
+    title = "Risk Attitudes by Gender",
+    x = "Gender"
+  ) +
+theme_minimal()
+```
+
+### Risk Scores by Education Levels
+
+```{r}
+# Define education levels and labels
+edu_levels <- 1:7
+edu_labels <- c(
+  "Less than HS",
+  "High School",
+  "Some College",
+  "Associate's Degree",
+  "Bachelor's Degree",
+  "Graduate Degree",
+  "Other"
+)
+
+# Summarize risk scores by education
+risk_summary_by_education <- NFCS_selected %>%
+  filter(J2 %in% 1:10, A5_2015 %in% edu_levels, B10 %in% 1:4) %>%
+  mutate(
+    Education = factor(A5_2015, levels = edu_levels, labels = edu_labels),
+    `Financial Risk Profile Score` = 5 - B10
+  ) %>%
+  group_by(Education) %>%
+  summarize(
+    `Willingness to Take Risk (Mean)` = mean(J2, na.rm = TRUE),
+    `Willingness to Take Risk (SD)` = sd(J2, na.rm = TRUE),
+    `Financial Risk Profile (Mean)` = mean(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Financial Risk Profile (SD)` = sd(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Sample Size (N)` = n()
+  ) %>%
+  arrange(desc(`Willingness to Take Risk (Mean)`))  # or use levels(Education) to preserve order
+risk_summary_by_education
+
+
+```
+
+```{r}
+# Plot combo chart
+ggplot(risk_summary_by_education, aes(x = Education)) +
+  geom_col(
+    aes(y = `Willingness to Take Risk (Mean)`),
+    fill = "steelblue", width = 0.6
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = `Willingness to Take Risk (Mean)` - `Willingness to Take Risk (SD)`,
+      ymax = `Willingness to Take Risk (Mean)` + `Willingness to Take Risk (SD)`
+    ),
+    width = 0.2
+  ) +
+  geom_line(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5, group = 1),
+    color = "darkorange", size = 1.2
+  ) +
+  geom_point(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5),
+    color = "darkorange", size = 3
+  ) +
+  scale_y_continuous(
+    name = "Willingness to Take Risk (1–10)",
+    sec.axis = sec_axis(~ . / 2.5, name = "Financial Risk Profile (1–4)")
+  ) +
+  labs(
+    title = "Risk Attitudes by Education Level",
+    x = "Education Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+### Risk Scores by Income Levels
+
+```{r}
+# Define income levels and labels
+income_levels <- 1:8
+income_labels <- c(
+  "Less than $15k", "$15k–$25k", "$25k–$35k", "$35k–$50k",
+  "$50k–$75k", "$75k–$100k", "$100k–$150k", "$150k+"
+)
+
+# Step 1: Summarize risk by income
+risk_summary_by_income <- NFCS_selected %>%
+  filter(J2 %in% 1:10, A8 %in% income_levels, B10 %in% 1:4) %>%
+  mutate(
+    Income = factor(A8, levels = income_levels, labels = income_labels),
+    `Financial Risk Profile Score` = 5 - B10
+  ) %>%
+  group_by(Income) %>%
+  summarize(
+    `Willingness to Take Risk (Mean)` = mean(J2, na.rm = TRUE),
+    `Willingness to Take Risk (SD)` = sd(J2, na.rm = TRUE),
+    `Financial Risk Profile (Mean)` = mean(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Financial Risk Profile (SD)` = sd(`Financial Risk Profile Score`, na.rm = TRUE),
+    `Sample Size (N)` = n()
+  ) %>%
+  arrange(Income)
+risk_summary_by_income
+```
+
+```{r}
+# Step 2: Plot combo chart
+ggplot(risk_summary_by_income, aes(x = Income)) +
+  geom_col(
+    aes(y = `Willingness to Take Risk (Mean)`),
+    fill = "steelblue", width = 0.6
+  ) +
+  geom_line(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5, group = 1),
+    color = "darkorange", size = 1.2
+  ) +
+  geom_point(
+    aes(y = `Financial Risk Profile (Mean)` * 2.5),
+    color = "darkorange", size = 3
+  ) +
+  scale_y_continuous(
+    name = "Willingness to Take Risk (1–10)",
+    sec.axis = sec_axis(~ . / 2.5, name = "Financial Risk Profile (1–4)")
+  ) +
+  labs(
+    title = "Risk Attitudes by Income Level",
+    x = "Income Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+### Crypto Interest vs. Age Group
+
+```{r}
+# Define age groups
+age_labels <- c("18–24", "25–34", "35–44", "45–54", "55–64", "65+")
+
+# Prepare data
+crypto_interest_by_age <- NFCS_selected %>%
+  filter(A3Ar_w %in% 1:6, B25 == 2) %>%  # Only those who have NOT invested
+  mutate(
+    Age_Group = factor(A3Ar_w, levels = 1:6, labels = age_labels),
+    B26_label = case_when(
+      B26 == 1 ~ "Yes",
+      B26 == 2 ~ "No",
+      B26 == 98 ~ "Don't know",
+      B26 == 99 ~ "Prefer not to say",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  group_by(Age_Group) %>%
+  summarize(
+    Total = n(),
+    Yes_Count = sum(B26 == 1, na.rm = TRUE),
+    Percent_Yes = round(100 * Yes_Count / Total, 1)
+  )
+crypto_interest_by_age
+
+
+```
+
+```{r}
+# Plot
+ggplot(crypto_interest_by_age, aes(x = Age_Group, y = Percent_Yes)) +
+  geom_col(fill = "mediumseagreen", width = 0.6) +
+  geom_text(aes(label = paste0(Percent_Yes, "%")), vjust = -0.5, size = 4) +
+  labs(
+    title = "Percentage Considering Cryptocurrency Investment by Age Group",
+    x = "Age Group",
+    y = "% Considering Crypto (Among All Non-Investors)"
+  ) +
+  ylim(0, 100) +
+  theme_minimal()
+```
+
+### Crypto Interest vs. Education Level
+
+```{r}
+# Define education levels and labels
+edu_levels <- 1:7
+edu_labels <- c(
+  "Less than HS",
+  "High School",
+  "Some College",
+  "Associate's Degree",
+  "Bachelor's Degree",
+  "Graduate Degree",
+  "Other"
+)
+
+# Prepare summarized data
+crypto_interest_by_edu <- NFCS_selected %>%
+  filter(A5_2015 %in% edu_levels, B25 == 2) %>%  # Not already invested
+  mutate(
+    Education = factor(A5_2015, levels = edu_levels, labels = edu_labels)
+  ) %>%
+  group_by(Education) %>%
+  summarize(
+    Total = n(),
+    Yes_Count = sum(B26 == 1, na.rm = TRUE),
+    Percent_Yes = round(100 * Yes_Count / Total, 1)
+  )
+crypto_interest_by_edu
+```
+
+```{r}
+# Plot bar chart
+ggplot(crypto_interest_by_edu, aes(x = Education, y = Percent_Yes)) +
+  geom_col(fill = "mediumseagreen", width = 0.6) +
+  geom_text(aes(label = paste0(Percent_Yes, "%")), vjust = -0.5, size = 4) +
+  labs(
+    title = "Percentage Considering Cryptocurrency Investment by Education Level",
+    x = "Education Level",
+    y = "% Considering Crypto (B26 = Yes, Among All Non-Investors)"
+  ) +
+  ylim(0, 100) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+## 4. Correlation Heatmap
+
+```{r}
+#Select key variables to generate correlation matrix
+key_vars <- c(
+  "fin_knowledge_score", "G2",              # Financial knowledge
+  "J2", "B10",                               # Risk tolerance
+  "B3", "B34", "B6",                         # Investment activity
+  "B25", "B26",                              # Crypto
+  "STATEQ", "A5_2015", "A8", "A3Ar_w", "A50A",  # Demographics
+  "G30_1.y",                                 # Investing motivation
+  "G21", "G22",                              # Beliefs
+  "B2_4", "B2_21",                           # ETFs, REITs
+  "B30"                                      # Year started investing
+)
+
+```
+
+```{r}
+#Match question number with meaningful description
+label_lookup <- c(
+  # Financial knowledge
+  fin_knowledge_score = "Objective Financial Knowledge",
+  G2 = "Subjective Financial Knowledge",
+
+  # Risk tolerance
+  J2 = "Risk Tolerance (1–10 Scale)",
+  B10 = "Risk Tolerance (Behavioral Statement)",
+
+  # Investment activity
+  B3 = "Trading Frequency (Past 12 Months)",
+  B34 = "Options Trading Experience",
+  B6 = "Used Margin to Buy Securities",
+
+  # Crypto
+  B25 = "Invested in Cryptocurrency",
+  B26 = "Belief About Crypto Risk",
+
+  # Demographics
+  STATEQ = "State",
+  A5_2015 = "Education Level",
+  A8 = "Household Income",
+  A3Ar_w = "Age Group",
+  A50A = "Gender",
+
+  # Motivation & beliefs
+  G30_1.y = "Investing Motivation: Short-Term Gain",
+  G21 = "Belief: Past Performance Predicts Future",
+  G22 = "Belief: Higher Returns = Higher Risk",
+
+  # Asset ownership
+  B2_4 = "Owns ETFs",
+  B2_21 = "Owns REITs",
+
+  # First-time investing
+  B30 = "Year Started Investing"
+)
+
+```
+
+```{r}
+# Select, clean, and prepare the data
+NFCS_heatmap <- NFCS_selected %>%
+  select(all_of(key_vars)) %>%
+  mutate(across(where(is.numeric), ~ replace(., . %in% c(98, 99), NA)))
+
+# Compute Pearson correlation matrix
+cor_matrix <- cor(NFCS_heatmap, use = "pairwise.complete.obs", method = "pearson")
+
+# Melt to long format and apply labels
+cor_long <- melt(cor_matrix, varnames = c("Var1", "Var2"), value.name = "Correlation") %>%
+  mutate(
+    Var1 = recode(Var1, !!!label_lookup),
+    Var2 = recode(Var2, !!!label_lookup)
+  )
+
+# Plot the heatmap with correlation values
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Correlation, 2)), size = 2, color = "black") +
+  scale_fill_viridis_c(option = "C", limits = c(-1, 1), direction = -1) +
+  labs(
+    title = "Correlation Heatmap (Pearson, Labeled)",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+    axis.text.y = element_text(size = 6),
+    panel.grid = element_blank()
+  )
+```
+
+**Observations:**
+
+Strongest Correlations:
+
+1.  Subjective & Objective Financial Knowledge (0.32) -\> People who thinks they're financially knowledgable tends to be.
+2.  Behavioral Risk Tolerance & Subjective Knowledge (0.37) -\> People who are more financially knowledgable more likely accept risks.
+3.  Behavioral Risk Tolerance & Risk Tolerance (1-10 Scale) (0.54)
+4.  Options Trading & Margin Use (0.42)
+5.  Trading Frequency & Margin Use (0.42)
+6.  Crypto Ownership & Belief About Crypto Risk (0.68)
+7.  Younger Age & Behavioral Risk Tolerance (0.41) -\> Younger respondents more like accept financial risks
+
+Moderate Correlations:
+
+1.  Education Level & Objective Knowledge (0.24) -\> Higher education associates with more knowledge
+2.  Income & Objective Knowledge (0.2)
+3.  ETFs & Objective Knowledge (0.22) -\> People who invest in ETFs tend to score higher in financial knowledge.
+4.  Investing Motivation: Short-Term Gain & Risk Tolerance (0.26) -\> People who targets short-term gain take more risk.
+5.  Age Group & Subjective Knowledge (0.25) -\> Older respondents have higher financial knowledge
