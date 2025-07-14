@@ -28,6 +28,8 @@ library(janitor)
 
 ## 1.2 Import dataset
 
+**NFCS data**
+
 ```{r}
 #Read NFCS 2021 State by State and Investor Data
 state_2021 <- read_csv("NFCS state by state.csv")
@@ -35,13 +37,27 @@ investor_2021 <- read_csv("NFCS 2021 Investor Data 221121.csv")
 #Read NFCS 2018 State by State and Investor Data
 state_2018 <- read_csv("NFCS 2018 State Data 190603.csv")
 investor_2018 <- read_csv("NFCS 2018 Investor Data 191107.csv")
+
+```
+
+**Covid Stringency**
+
+```{r}
+# Read and preprocess Covid Stringtency data
+covid_data <- read_csv("OxCGRT_simplified_Covid stringency.csv") %>%
+  mutate(
+    Date = ymd(Date),
+    Year = year(Date),
+    RegionName = ifelse(RegionName == "Washington DC", "District of Columbia", RegionName)
+  ) %>%
+  filter(CountryCode == "USA")
 ```
 
 # 2. Data Cleaning
 
-## 2.1 Merge datasets
+## 2.1 Merge NFCS datasets
 
-Merge 2018 and 2021 State by State datasets
+**Merge 2018 and 2021 State by State datasets**
 
 \- Rename A3 to A50A as the standard column for gender.
 
@@ -64,7 +80,7 @@ state_2021$A8[state_2021$A8 %in% c(8,9,10)] <- 8
 state <- bind_rows(state_2018, state_2021)
 ```
 
-Merge 2018 and 2021 Investor datasets
+**Merge 2018 and 2021 Investor datasets**
 
 \- Rename `S_Gender2` to `S_Gender` as the standard column for gender.
 
@@ -85,21 +101,91 @@ investor_2021 <- investor_2021 %>% mutate(source_year = 2021)
 investor <- bind_rows(investor_2018, investor_2021)
 ```
 
-Merge state and investor datasets
+**Merge state and investor datasets**
 
 ```{r}
 #Merge State and Investor datasets
 NFCS_data <- merge(investor, state, by="NFCSID")
 ```
 
-## 2.2 Filter key variables
+## 2.2 Preprocess and Merge Covid contigency
+
+**State Name to STATEQ Code Mapping**
+
+```{r}
+state_map <- data.frame(
+  STATEQ = 1:51,
+  RegionName = c(
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+    "Delaware", "District of Columbia", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois",
+    "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts",
+    "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+    "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota",
+    "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia",
+    "Wisconsin", "Wyoming"
+  )
+)
+
+```
+
+**Filter for mean and max stringency over 2020 and 2021**
+
+```{r}
+# Mean and max stringency
+mean_stringency <- covid_data %>% 
+    left_join(state_map, by = "RegionName") %>% #Map state number to state name 
+    group_by(STATEQ, RegionName, Year) %>%
+    summarise(StringencyIndex = mean(StringencyIndex_Average, na.rm = TRUE), .groups = "drop") %>%
+  drop_na(STATEQ)
+
+max_stringency <- covid_data %>% 
+  left_join(state_map, by = "RegionName") %>%
+  group_by(STATEQ,RegionName, Year) %>%
+  summarise(StringencyIndex = max(StringencyIndex_Average, na.rm = TRUE), .groups = "drop") %>%
+  drop_na(STATEQ)
+
+# Filter for specific years
+mean_stringency_2021 <- mean_stringency %>%
+  filter(Year == 2021) %>%
+  select(-Year) %>%
+  rename(mean_stringency_2021 = StringencyIndex)
+
+max_stringency_2021 <- max_stringency %>%
+  filter(Year == 2021) %>%
+  select(-Year) %>%
+  rename(max_stringency_2021 = StringencyIndex)
+
+mean_stringency_2020 <- mean_stringency %>%
+  filter(Year == 2020) %>%
+  select(-Year) %>%
+  rename(mean_stringency_2020 = StringencyIndex)
+
+max_stringency_2020 <- max_stringency %>%
+  filter(Year == 2020) %>%
+  rename(max_stringency_2020 = StringencyIndex)
+```
+
+**Merge NFCS and Covid stringency datasets**
+
+```{r}
+#Merge State and Investor datasets
+NFCS_data <- NFCS_data %>% 
+  left_join(mean_stringency_2021, by="STATEQ") %>% 
+  left_join(max_stringency_2021, by="STATEQ") %>%
+  left_join(mean_stringency_2020, by="STATEQ") %>% 
+  left_join(max_stringency_2020, by="STATEQ") 
+
+```
+
+## 2.3 Filter key variables
 
 ```{r}
 key_vars <- c(
   # Year
   "source_year",
   # Demographics
-  "A50A", "A3Ar_w", "A4A_new_w", "A5_2015", "A9", "A21_2015", "A8", "STATEQ",
+  "A50A", "A3Ar_w", "A4A_new_w", "A5_2015", "A9", "A21_2015","A22_2015", "A8", "STATEQ",
   "CENSUSDIV", "A6", "A7", "A11", "X3",
   
   # Student loan
@@ -119,15 +205,40 @@ key_vars <- c(
   
   # Financial Risk-Taking Behavior
   "B2_1", "B2_2", "B2_3", "B2_4", "B2_5", "B2_7", "B2_20", "B2_21", "B2_22",
-  "B2_23", "B2_24", "B2_25", "B11", "B25", "B26"
+  "B2_23", "B2_24", "B2_25", "B11", "B25", "B26",
+  
+  #Stringency Indexes
+  "mean_stringency_2021", "max_stringency_2021",     "mean_stringency_2020", "max_stringency_2020"
 )
 
 NFCS_selected <- NFCS_data %>% select(all_of(key_vars))
 ```
 
-# Exploratory Data Analysis
+## 2.4 Create new target variable
 
-## 1. Dataset Overview
+Create binary risk_behavior variable based on question B10 in which respondent chooses one out of 4 financial risk taking statements
+
+```{r}
+NFCS_selected <- NFCS_selected %>% mutate(risk_behavior = case_when(
+  B10 %in% c(1,2,3) ~ 1,
+  B10 == 4 ~ 0,
+  TRUE ~ NA_real_
+))
+
+sum(NFCS_selected$risk_behavior==0)/sum(NFCS_selected$risk_behavior)
+```
+
+```{r}
+#View number of 1s and 0s for risk_behavior variable
+sum(NFCS_selected$risk_behavior==0, na.rm = 1)
+sum(NFCS_selected$risk_behavior==1, na.rm = 1)
+
+#There's a class imbalance
+```
+
+# 3. Exploratory Data Analysis
+
+## 3.1 Dataset Overview
 
 ```{r}
 #1. Preview sample of the data
@@ -163,7 +274,7 @@ missing_percentage <- round((total_missing/total_cells)*100,2)
 cat("Percentage of missing cells:", missing_percentage, "%\n")
 ```
 
-## 2. Univariate Analysis
+## 3.2 Univariate Analysis
 
 ### Gender - A50A
 
@@ -541,9 +652,9 @@ NFCS_selected %>%
 
 ```
 
-## 3. Bivariate Analysis
+## 3.3 Bivariate Analysis
 
-## 3.1 Financial Knowledge - Objective and Subjective
+## 3.3.1 Financial Knowledge - Objective and Subjective
 
 ### By Age Group
 
@@ -660,7 +771,7 @@ NFCS_selected %>%
   )
 ```
 
-## 3.2 Financial Risk & Investment
+## 3.3.2 Financial Risk & Investment
 
 ### Risk Scores by Age group
 
@@ -982,7 +1093,7 @@ ggplot(crypto_interest_by_edu, aes(x = Education, y = Percent_Yes)) +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 ```
 
-## 4. Correlation Heatmap
+## 3.4. Correlation Heatmap
 
 ```{r}
 #Select key variables to generate correlation matrix
@@ -1052,7 +1163,10 @@ NFCS_heatmap <- NFCS_selected %>%
 cor_matrix <- cor(NFCS_heatmap, use = "pairwise.complete.obs", method = "pearson")
 
 # Melt to long format and apply labels
-cor_long <- melt(cor_matrix, varnames = c("Var1", "Var2"), value.name = "Correlation") %>%
+cor_long <- cor_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Var1") %>%
+  pivot_longer(-Var1, names_to = "Var2", values_to = "Correlation") %>%
   mutate(
     Var1 = recode(Var1, !!!label_lookup),
     Var2 = recode(Var2, !!!label_lookup)
@@ -1096,3 +1210,118 @@ Moderate Correlations:
 3.  ETFs & Objective Knowledge (0.22) -\> People who invest in ETFs tend to score higher in financial knowledge.
 4.  Investing Motivation: Short-Term Gain & Risk Tolerance (0.26) -\> People who targets short-term gain take more risk.
 5.  Age Group & Subjective Knowledge (0.25) -\> Older respondents have higher financial knowledge
+
+# 4. Linear Regression
+
+### Transform B10 into a binary variable:
+
+```{r}
+# Transform B10 into a binary variable: 
+# 1 = Risk taker (original answers 1–3), 0 = Risk hater (original answer 4)
+
+NFCS_selected <- NFCS_selected %>%
+  mutate(
+    B10_binary = case_when(
+      B10 %in% c(1, 2, 3) ~ 1,  # Risk takers
+      B10 == 4 ~ 0,            # Risk haters
+      TRUE ~ NA_real_          # Preserve NAs
+    )
+  )
+```
+
+### Rename & Convert Datatype Where Needed
+
+```{r}
+# Rename variables
+NFCS_selected <- NFCS_selected %>%
+  rename(
+    Risk_Taker = B10_binary,
+    Age_Group = A3Ar_w,
+    Gender = A50A,
+    Education_Level = A5_2015,
+    Income_Bracket = A8,
+    Objective_Knowledge = fin_knowledge_score,
+    Subjective_Knowledge = G2,
+    Investing_Confidence = G21,
+    ShortTerm_Investor = G30_1.y
+  )
+
+# Convert categorical variables to factors
+NFCS_selected <- NFCS_selected %>%
+  mutate(
+    Age_Group = as.factor(Age_Group),
+    Gender = as.factor(Gender),
+    Education_Level = as.factor(Education_Level),
+    Income_Bracket = as.factor(Income_Bracket),
+    Investing_Confidence = as.factor(Investing_Confidence),
+    ShortTerm_Investor = as.factor(ShortTerm_Investor)
+  )
+```
+
+### Logistic Regression: Mean Stringency 2020
+
+```{r}
+model_mean_2020 <- glm(
+  Risk_Taker ~ mean_stringency_2020 + Objective_Knowledge + Subjective_Knowledge +
+    Investing_Confidence + ShortTerm_Investor + Age_Group + Gender +
+    Education_Level + Income_Bracket,
+  data = NFCS_selected,
+  family = binomial()
+)
+summary(model_mean_2020)
+
+
+```
+
+### Logistic Regression: Max Stringency 2020
+
+```{r}
+model_max_2020 <- glm(
+  Risk_Taker ~ max_stringency_2020 + Objective_Knowledge + Subjective_Knowledge +
+    Investing_Confidence + ShortTerm_Investor + Age_Group + Gender +
+    Education_Level + Income_Bracket,
+  data = NFCS_selected,
+  family = binomial()
+)
+summary(model_max_2020)
+```
+
+### **Logistic Regression: Mean Stringency 2021**
+
+```{r}
+model_mean_2021 <- glm(
+  Risk_Taker ~ mean_stringency_2021 + Objective_Knowledge + Subjective_Knowledge +
+    Investing_Confidence + ShortTerm_Investor + Age_Group + Gender +
+    Education_Level + Income_Bracket,
+  data = NFCS_selected,
+  family = binomial()
+)
+summary(model_mean_2021)
+```
+
+### **Logistic Regression: Max Stringency 2021**
+
+```{r}
+model_max_2021 <- glm(
+  Risk_Taker ~ max_stringency_2021 + Objective_Knowledge + Subjective_Knowledge +
+    Investing_Confidence + ShortTerm_Investor + Age_Group + Gender +
+    Education_Level + Income_Bracket,
+  data = NFCS_selected,
+  family = binomial()
+)
+summary(model_max_2021)
+```
+
+### Test
+
+```{r}
+model_mean_2020 <- glm(
+  Risk_Taker ~ mean_stringency_2020 + Subjective_Knowledge +
+    Investing_Confidence + ShortTerm_Investor + Age_Group + Gender +
+    Education_Level + Income_Bracket,
+  data = NFCS_selected,
+  family = binomial()
+)
+summary(model_mean_2020)
+
+```
